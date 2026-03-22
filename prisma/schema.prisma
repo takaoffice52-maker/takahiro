@@ -1,0 +1,110 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Mansion {
+  id              Int      @id @default(autoincrement())
+  slug            String   @unique
+  name            String
+  nameKana        String?  @map("name_kana")
+  normalizedName  String   @map("normalized_name")
+  address         String
+  areaName        String   @map("area_name")
+  city            String
+  latitude        Float?
+  longitude       Float?
+  landRights      String?  @map("land_rights")
+  totalUnits      Int?     @map("total_units")
+  builtYearMonth  String?  @map("built_year_month")
+  builtYear       Int?     @map("built_year")
+  ageYears        Int?     @map("age_years")
+  developer       String?
+  constructorName String?  @map("constructor")
+  accessInfo      String?  @map("access_info")
+  schoolDistrict  String?  @map("school_district")
+  zoning          String?
+  structureText   String?  @map("structure_text")
+  floors          Int?
+  parkingInfo     String?  @map("parking_info")
+  layoutTypes     String?  @map("layout_types")
+  description     String?
+  featuredImageUrl String? @map("featured_image_url")
+  isPublished     Boolean  @default(true) @map("is_published")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  managements  MansionManagement[]
+  sales        MansionSale[]
+  transactions MansionTransaction[]
+
+  @@map("mansions")
+}
+
+model MansionManagement {
+  id                      Int      @id @default(autoincrement())
+  mansionId               Int      @map("mansion_id")
+  managementCompany       String?  @map("management_company")
+  managementStyle         String?  @map("management_style")
+  monthlyManagementFee    Int?     @map("monthly_management_fee")
+  monthlyRepairReserveFee Int?     @map("monthly_repair_reserve_fee")
+  petAllowed              Boolean? @map("pet_allowed")
+  parkingAvailable        Boolean? @map("parking_available")
+  notes                   String?
+  updatedAt               DateTime @updatedAt @map("updated_at")
+
+  mansion Mansion @relation(fields: [mansionId], references: [id], onDelete: Cascade)
+
+  @@map("mansion_managements")
+}
+
+model MansionSale {
+  id                Int       @id @default(autoincrement())
+  mansionId         Int       @map("mansion_id")
+  roomNumber        String?   @map("room_number")
+  floorNumber       Int?      @map("floor_number")
+  layout            String?
+  exclusiveArea     Float?    @map("exclusive_area")
+  balconyArea       Float?    @map("balcony_area")
+  direction         String?
+  price             Int?
+  pricePerTsubo     Int?      @map("price_per_tsubo")
+  status            String    @default("for_sale")
+  listingSourceName String?   @map("listing_source_name")
+  listingSourceUrl  String?   @map("listing_source_url")
+  fetchedAt         DateTime? @map("fetched_at")
+  publishedAt       DateTime? @map("published_at")
+  isPublished       Boolean   @default(true) @map("is_published")
+  createdAt         DateTime  @default(now()) @map("created_at")
+  updatedAt         DateTime  @updatedAt @map("updated_at")
+
+  mansion Mansion @relation(fields: [mansionId], references: [id], onDelete: Cascade)
+
+  @@map("mansion_sales")
+}
+
+model MansionTransaction {
+  id                  Int      @id @default(autoincrement())
+  mansionId           Int      @map("mansion_id")
+  contractYearMonth   String?  @map("contract_year_month")
+  floorNumber         Int?     @map("floor_number")
+  layout              String?
+  exclusiveArea       Float?   @map("exclusive_area")
+  contractPriceMin    Int?     @map("contract_price_min")
+  contractPriceMax    Int?     @map("contract_price_max")
+  pricePerTsuboMin    Int?     @map("price_per_tsubo_min")
+  pricePerTsuboMax    Int?     @map("price_per_tsubo_max")
+  sourceName          String?  @map("source_name")
+  notes               String?
+  isPublished         Boolean  @default(true) @map("is_published")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  mansion Mansion @relation(fields: [mansionId], references: [id], onDelete: Cascade)
+
+  @@map("mansion_transactions")
+}
