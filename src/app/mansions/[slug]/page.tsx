@@ -7,6 +7,7 @@ import Footer from "@/components/Footer";
 import SalesList from "@/components/SalesList";
 import TransactionsList from "@/components/TransactionsList";
 import type { Mansion } from "@/types";
+import { prisma } from "@/lib/prisma";
 import {
   formatBuiltYearMonth,
   formatAgeYears,
@@ -21,13 +22,16 @@ type PageProps = {
 
 async function getMansion(slug: string): Promise<Mansion | null> {
   try {
-    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
-    const res = await fetch(`${baseUrl}/api/mansions?slug=${encodeURIComponent(slug)}`, {
-      cache: "no-store",
+    const mansion = await prisma.mansion.findUnique({
+      where: { slug, isPublished: true },
+      include: {
+        _count: { select: { sales: true, transactions: true } },
+        managements: { take: 1 },
+        sales: { where: { isPublished: true }, orderBy: { price: "asc" } },
+        transactions: { where: { isPublished: true }, orderBy: { contractYearMonth: "desc" }, take: 20 },
+      },
     });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data.data?.[0] ?? null;
+    return mansion as unknown as Mansion | null;
   } catch {
     return null;
   }

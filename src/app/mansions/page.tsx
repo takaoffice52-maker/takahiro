@@ -5,7 +5,7 @@ import Footer from "@/components/Footer";
 import SearchForm from "@/components/SearchForm";
 import MansionCard from "@/components/MansionCard";
 import type { Mansion, PaginatedResponse } from "@/types";
-import { buildQueryString } from "@/lib/utils";
+import { prisma } from "@/lib/prisma";
 
 export const metadata: Metadata = {
   title: "マンション一覧",
@@ -26,29 +26,63 @@ type PageProps = {
   }>;
 };
 
-async function getMansions(searchParams: Awaited<PageProps["searchParams"]>) {
-  const params: Record<string, string | number | undefined> = {
-    page: searchParams.page ? parseInt(searchParams.page) : 1,
-    limit: 12,
-  };
-  if (searchParams.city) params.city = searchParams.city;
-  if (searchParams.keyword) params.keyword = searchParams.keyword;
-  if (searchParams.layout) params.layout = searchParams.layout;
-  if (searchParams.minPrice) params.minPrice = searchParams.minPrice;
-  if (searchParams.maxPrice) params.maxPrice = searchParams.maxPrice;
-  if (searchParams.minArea) params.minArea = searchParams.minArea;
-  if (searchParams.maxArea) params.maxArea = searchParams.maxArea;
-  if (searchParams.builtYearFrom) params.builtYearFrom = searchParams.builtYearFrom;
+async function getMansions(searchParams: Awaited<PageProps["searchParams"]>): Promise<PaginatedResponse<Mansion>> {
+  const page = Math.max(1, parseInt(searchParams.page || "1"));
+  const limit = 12;
+  const skip = (page - 1) * limit;
 
-  const qs = buildQueryString(params as Record<string, string | number | boolean | undefined>);
+  const where: Record<string, unknown> = { isPublished: true };
+
+  if (searchParams.city) where.city = searchParams.city;
+  if (searchParams.builtYearFrom) where.builtYear = { gte: parseInt(searchParams.builtYearFrom) };
+
+  if (searchParams.keyword) {
+    const keyword = searchParams.keyword;
+    where.OR = [
+      { name: { contains: keyword } },
+      { normalizedName: { contains: keyword } },
+      { address: { contains: keyword } },
+      { areaName: { contains: keyword } },
+      { city: { contains: keyword } },
+      { description: { contains: keyword } },
+    ];
+  }
+
+  const { minPrice, maxPrice, layout, minArea, maxArea } = searchParams;
+  if (minPrice || maxPrice || layout || minArea || maxArea) {
+    const salesFilter: Record<string, unknown> = { isPublished: true };
+    if (layout) salesFilter.layout = { contains: layout };
+    if (minPrice) salesFilter.price = { ...((salesFilter.price as object) || {}), gte: parseInt(minPrice) };
+    if (maxPrice) salesFilter.price = { ...((salesFilter.price as object) || {}), lte: parseInt(maxPrice) };
+    if (minArea) salesFilter.exclusiveArea = { ...((salesFilter.exclusiveArea as object) || {}), gte: parseFloat(minArea) };
+    if (maxArea) salesFilter.exclusiveArea = { ...((salesFilter.exclusiveArea as object) || {}), lte: parseFloat(maxArea) };
+    where.sales = { some: salesFilter };
+  }
 
   try {
-    const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000";
-    const res = await fetch(`${baseUrl}/api/mansions${qs}`, {
-      cache: "no-store",
-    });
-    if (!res.ok) throw new Error("Failed to fetch");
-    return res.json() as Promise<PaginatedResponse<Mansion>>;
+    const [total, mansions] = await Promise.all([
+      prisma.mansion.count({ where }),
+      prisma.mansion.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { createdAt: "desc" },
+        include: {
+          _count: { select: { sales: true, transactions: true } },
+          managements: { take: 1 },
+          sales: { where: { isPublished: true }, orderBy: { price: "asc" } },
+          transactions: { where: { isPublished: true }, orderBy: { contractYearMonth: "desc" }, take: 5 },
+        },
+      }),
+    ]);
+
+    return {
+      data: mansions as unknown as Mansion[],
+      total,
+      page,
+      limit,
+      totalPages: Math.ceil(total / limit),
+    };
   } catch {
     return { data: [], total: 0, page: 1, limit: 12, totalPages: 0 };
   }
