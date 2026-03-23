@@ -310,16 +310,22 @@ def _debug_structure(page):
 def extract_property(card, page_url: str) -> dict | None:
     """カード要素から物件情報を抽出"""
     try:
-        # リンク取得
-        link_el = card.query_selector("a[href]")
-        if not link_el:
-            return None
-        href = link_el.get_attribute("href") or ""
-        if href.startswith("/"):
-            prop_url = BASE_URL + href
-        elif href.startswith("http"):
-            prop_url = href
-        else:
+        # リンク取得 ── /bukken/ を含む詳細ページリンクを優先
+        prop_url = None
+        link_el = None
+        for a in card.query_selector_all("a[href]"):
+            h = a.get_attribute("href") or ""
+            if "panorama" in h or "pano" in h:
+                continue  # パノラマページは除外
+            if h.startswith("/"):
+                prop_url = BASE_URL + h
+                link_el = a
+                break
+            elif h.startswith("http"):
+                prop_url = h
+                link_el = a
+                break
+        if not prop_url or not link_el:
             return None
 
         # テキスト全体
@@ -405,6 +411,10 @@ def extract_property(card, page_url: str) -> dict | None:
                 if key in page_url:
                     location = val
                     break
+
+        # 価格・面積が両方とも取得できない場合はスキップ（パノラマ等の別ページ）
+        if price_val is None and area_val is None:
+            return None
 
         return {
             "id": prop_url,  # URLをユニークキーとして使用
