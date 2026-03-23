@@ -361,7 +361,7 @@ def extract_property(card, page_url: str) -> dict | None:
         # 面積 ── クラス名→全span→全td→全dd→フルテキスト の順に試す
         area_val = None
         area_text = ""
-        for sel in [".menseki", ".area", ".size", ".square",
+        for sel in ["span.menseki", ".menseki", "span.area", ".area", ".size", ".square",
                     "[class*='menseki']", "[class*='area']", "[class*='size']",
                     "span", "td", "dd", "li", "p"]:
             els = card.query_selector_all(sel)
