@@ -258,7 +258,7 @@ def _debug_structure(page):
             if len(lis) >= 2:
                 cls = ul.get_attribute("class") or "(no class)"
                 print(f"    ul.class={cls!r}: {len(lis)} li要素")
-        # 万円を含む要素
+        # 万円を含む要素（最小要素）
         price_els = page.query_selector_all("*")
         count = 0
         print(f"  [DEBUG] 万円を含む要素（最大5件）:")
@@ -274,6 +274,35 @@ def _debug_structure(page):
                         break
             except Exception:
                 pass
+        # ㎡を含む要素（最小要素）
+        area_els = page.query_selector_all("*")
+        count = 0
+        print(f"  [DEBUG] ㎡を含む要素（最大5件）:")
+        for el in area_els:
+            try:
+                t = el.inner_text()
+                if "㎡" in t and len(t) < 60:
+                    tag = el.evaluate("el => el.tagName.toLowerCase()")
+                    cls = el.get_attribute("class") or ""
+                    print(f"    <{tag} class={cls!r}>: {t.strip()[:60]!r}")
+                    count += 1
+                    if count >= 5:
+                        break
+            except Exception:
+                pass
+        # objectList の最初の li の子要素を全て表示
+        first_li = page.query_selector(".objectList li")
+        if first_li:
+            print(f"  [DEBUG] .objectList li 最初の要素の子span/td/dd:")
+            for tag in ["span", "td", "dd", "p", "div"]:
+                for el in first_li.query_selector_all(tag):
+                    try:
+                        t = el.inner_text().strip()
+                        cls = el.get_attribute("class") or ""
+                        if t:
+                            print(f"    <{tag} class={cls!r}>: {t[:50]!r}")
+                    except Exception:
+                        pass
     except Exception as e:
         print(f"  [DEBUG] 構造調査エラー: {e}")
 
@@ -312,8 +341,8 @@ def extract_property(card, page_url: str) -> dict | None:
         # 価格
         price_val = None
         price_text = ""
-        for sel in [".price", ".bukken-price", "[class*='price']",
-                    "[class*='kakaku']", "dd"]:
+        for sel in ["span.price", ".price", ".bukken-price", "[class*='price']",
+                    "[class*='kakaku']", "dd", "td", "span"]:
             els = card.query_selector_all(sel)
             for el in els:
                 t = el.inner_text()
@@ -329,10 +358,12 @@ def extract_property(card, page_url: str) -> dict | None:
             m = re.search(r"[\d,]+\s*万円", full_text)
             price_text = m.group(0) if m else ""
 
-        # 面積
+        # 面積 ── クラス名→全span→全td→全dd→フルテキスト の順に試す
         area_val = None
         area_text = ""
-        for sel in [".area", ".menseki", "[class*='area']", "[class*='menseki']", "dd"]:
+        for sel in [".menseki", ".area", ".size", ".square",
+                    "[class*='menseki']", "[class*='area']", "[class*='size']",
+                    "span", "td", "dd", "li", "p"]:
             els = card.query_selector_all(sel)
             for el in els:
                 t = el.inner_text()
@@ -344,6 +375,7 @@ def extract_property(card, page_url: str) -> dict | None:
             if area_val:
                 break
         if area_val is None:
+            # フルテキストから直接抽出（最終フォールバック）
             area_val = extract_area(full_text)
             m = re.search(r"[\d.]+\s*(?:㎡|m²|ｍ²|m2)", full_text)
             area_text = m.group(0) if m else ""
