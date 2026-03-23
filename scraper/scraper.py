@@ -57,7 +57,12 @@ def extract_price(text: str) -> float | None:
 def extract_area(text: str) -> float | None:
     """面積テキストから数値（㎡）を抽出"""
     text = text.replace(",", "").replace(" ", "").replace("\u3000", "")
-    m = re.search(r"(\d+(?:\.\d+)?)\s*(?:㎡|m²|ｍ²|m2)", text)
+    # ㎡, m², ｍ², m2, 平方メートル, 坪（坪→㎡換算はしない）
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(?:㎡|m²|ｍ²|m2|平方メートル)", text)
+    if m:
+        return float(m.group(1))
+    # 「専有面積」「建物面積」の後の数値も試す
+    m = re.search(r"(?:専有|建物|床)面積[^\d]*(\d+(?:\.\d+)?)", text)
     if m:
         return float(m.group(1))
     return None
@@ -67,58 +72,210 @@ def scrape_page(page, url: str, debug: bool = False) -> list[dict]:
     """1ページから物件リストを取得"""
     print(f"  取得中: {url}")
     try:
-        page.goto(url, wait_until="networkidle", timeout=30000)
+        page.goto(url, wait_until="domcontentloaded", timeout=30000)
     except PlaywrightTimeoutError:
         print(f"  警告: タイムアウト（部分的に読み込み済みのデータを使用）: {url}")
+
+    # JS描画完了を待つ
+    page.wait_for_timeout(3000)
 
     if debug:
         dump_path = Path(__file__).parent / "debug_dump.html"
         dump_path.write_text(page.content(), encoding="utf-8")
         print(f"  [DEBUG] HTMLを保存: {dump_path}")
+        print(f"  [DEBUG] ページタイトル: {page.title()}")
+        try:
+            body_text = page.inner_text("body")
+            print(f"  [DEBUG] 本文先頭300字: {body_text[:300].replace(chr(10), ' ')}")
+            print(f"  [DEBUG] 万円を含む行数: {body_text.count('万円')}")
+            print(f"  [DEBUG] ㎡を含む行数: {body_text.count('㎡')}")
+        except Exception:
+            pass
+        _debug_structure(page)
 
-    properties = []
+    # ── 手法1: 物件詳細リンクから親カードを特定 ──
+    cards, method = _find_cards_by_links(page)
 
-    # ───── セレクタ候補（実際のHTML確認後に更新） ─────
-    # e-uchina.net の物件カード候補セレクタ（優先順）
-    CARD_SELECTORS = [
-        ".item",
-        ".bukken-item",
-        ".property-item",
-        ".list-item",
-        "li.item",
-        ".object-list li",
-        ".property-list li",
-        ".search-result li",
-        "[class*='item']",
-        "[class*='bukken']",
-        "[class*='property']",
-    ]
+    if not cards:
+        # ── 手法2: クラス名セレクタ ──
+        cards, method = _find_cards_by_selector(page)
 
-    cards = []
-    used_selector = None
-    for sel in CARD_SELECTORS:
-        found = page.query_selector_all(sel)
-        if found and len(found) > 0:
-            cards = found
-            used_selector = sel
-            break
+    if not cards:
+        # ── 手法3: 価格テキストを含む最小要素 ──
+        cards, method = _find_cards_by_content(page)
 
     if not cards:
         print(f"  警告: 物件カードが見つかりません: {url}")
-        if debug:
-            # ページ内の主要なul/liを出力
-            all_lists = page.query_selector_all("ul li")
-            print(f"  [DEBUG] ul>li の数: {len(all_lists)}")
         return []
 
-    print(f"  セレクタ '{used_selector}' で {len(cards)} 件見つかりました")
+    print(f"  [{method}] {len(cards)} 件見つかりました")
 
+    properties = []
     for card in cards:
         prop = extract_property(card, url)
         if prop:
             properties.append(prop)
 
     return properties
+
+
+def _find_cards_by_links(page):
+    """物件詳細URLパターン（/bukken/）を持つリンクの親要素をカードとして取得"""
+    LINK_PATTERNS = [
+        "a[href*='/bukken/']",
+        "a[href*='/detail']",
+        "a[href*='/mansion/']",
+        "a[href*='/jukyo/']",
+    ]
+    for pattern in LINK_PATTERNS:
+        links = page.query_selector_all(pattern)
+        if not links:
+            continue
+        # リンクが詳細ページへのものか確認（一覧ページの自己リンクを除外）
+        detail_links = [
+            lnk for lnk in links
+            if (lnk.get_attribute("href") or "").count("/") >= 3
+        ]
+        if not detail_links:
+            continue
+        # 各リンクの親要素を取得（li, article, div を優先）
+        cards = []
+        seen = set()
+        for lnk in detail_links:
+            parent = lnk.evaluate_handle(
+                "el => el.closest('li, article, tr') || el.parentElement"
+            ).as_element()
+            if parent is None:
+                continue
+            pid = parent.evaluate("el => el.outerHTML.slice(0, 50)")
+            if pid not in seen:
+                seen.add(pid)
+                cards.append(parent)
+        if cards:
+            return cards, f"link-based({pattern})"
+    return [], ""
+
+
+def _find_cards_by_selector(page):
+    """クラス名セレクタで物件カードを取得"""
+    CARD_SELECTORS = [
+        # e-uchina.net 向け候補
+        ".objectList li",
+        ".object-list li",
+        ".objectlist li",
+        ".bukkenList li",
+        ".bukken-list li",
+        ".propertyList li",
+        ".property-list li",
+        ".searchResult li",
+        ".search-result li",
+        ".listTable tr",
+        # 汎用
+        "ul.list > li",
+        "ul > li.item",
+        "ul > li.bukken",
+        "ul > li.property",
+        ".item",
+        ".bukken-item",
+        ".property-item",
+        ".list-item",
+        "li.item",
+        "article.item",
+        "article",
+        ".card",
+        # ワイルドカード（最後の手段）
+        "[class*='objectList'] li",
+        "[class*='bukken'] li",
+        "[class*='list'] li",
+    ]
+    for sel in CARD_SELECTORS:
+        found = page.query_selector_all(sel)
+        # 少なくとも2件以上、かつ万円か㎡を含むものに絞る
+        if found and len(found) >= 2:
+            valid = [el for el in found if _has_property_text(el)]
+            if valid:
+                return valid, f"selector({sel})"
+    return [], ""
+
+
+def _find_cards_by_content(page):
+    """価格テキスト（万円）を含む最小のブロック要素をカードとして取得"""
+    try:
+        # JavaScript で「万円」を含む最小ブロック要素を収集
+        result = page.evaluate("""() => {
+            const tags = ['li', 'tr', 'article', 'div', 'section'];
+            const seen = new Set();
+            const cards = [];
+            for (const tag of tags) {
+                for (const el of document.querySelectorAll(tag)) {
+                    const txt = el.innerText || '';
+                    if (!txt.includes('万円')) continue;
+                    // 子要素も万円を含む場合は子要素側を優先（最小要素を取る）
+                    const children = [...el.querySelectorAll(tag)];
+                    const hasChildWithPrice = children.some(c => (c.innerText||'').includes('万円'));
+                    if (hasChildWithPrice) continue;
+                    // リンクを含むこと
+                    if (!el.querySelector('a')) continue;
+                    const key = el.outerHTML.slice(0, 80);
+                    if (!seen.has(key)) {
+                        seen.add(key);
+                        cards.push(key);
+                    }
+                }
+                if (cards.length >= 2) break;
+            }
+            return cards.length;
+        }""")
+        if result >= 2:
+            # 実際の要素を取得するため同じロジックをセレクタで近似
+            for tag in ["li", "tr", "article", "div"]:
+                candidates = page.query_selector_all(tag)
+                valid = [el for el in candidates if _has_property_text(el)]
+                if len(valid) >= 2:
+                    return valid, f"content-based({tag})"
+    except Exception as e:
+        print(f"  [WARN] content-based検出エラー: {e}")
+    return [], ""
+
+
+def _has_property_text(el) -> bool:
+    """要素が価格（万円）または面積（㎡）を含むか確認"""
+    try:
+        t = el.inner_text()
+        return "万円" in t or "㎡" in t
+    except Exception:
+        return False
+
+
+def _debug_structure(page):
+    """デバッグ用: ページ内のul/li・クラス構造を出力"""
+    try:
+        # ul要素の調査
+        uls = page.query_selector_all("ul")
+        print(f"  [DEBUG] ul要素数: {len(uls)}")
+        for ul in uls[:8]:
+            lis = ul.query_selector_all("li")
+            if len(lis) >= 2:
+                cls = ul.get_attribute("class") or "(no class)"
+                print(f"    ul.class={cls!r}: {len(lis)} li要素")
+        # 万円を含む要素
+        price_els = page.query_selector_all("*")
+        count = 0
+        print(f"  [DEBUG] 万円を含む要素（最大5件）:")
+        for el in price_els:
+            try:
+                t = el.inner_text()
+                if "万円" in t and len(t) < 60:
+                    tag = el.evaluate("el => el.tagName.toLowerCase()")
+                    cls = el.get_attribute("class") or ""
+                    print(f"    <{tag} class={cls!r}>: {t.strip()[:60]!r}")
+                    count += 1
+                    if count >= 5:
+                        break
+            except Exception:
+                pass
+    except Exception as e:
+        print(f"  [DEBUG] 構造調査エラー: {e}")
 
 
 def extract_property(card, page_url: str) -> dict | None:
@@ -236,11 +393,13 @@ def extract_property(card, page_url: str) -> dict | None:
 def scrape_all(debug: bool = False) -> dict[str, dict]:
     """全URLをスクレイピングして物件辞書を返す"""
     all_properties = {}
+    # デバッグ時は最初の1URLだけ処理してHTMLを保存
+    urls = URLS[:1] if debug else URLS
 
     with sync_playwright() as p:
         browser = p.chromium.launch(
             headless=True,
-            args=["--no-sandbox", "--disable-setuid-sandbox"],
+            args=["--no-sandbox", "--disable-setuid-sandbox", "--disable-gpu"],
         )
         context = browser.new_context(
             user_agent=(
@@ -249,24 +408,26 @@ def scrape_all(debug: bool = False) -> dict[str, dict]:
                 "Chrome/120.0.0.0 Safari/537.36"
             ),
             viewport={"width": 1280, "height": 800},
+            locale="ja-JP",
         )
         page = context.new_page()
 
-        for url in URLS:
+        for url in urls:
             try:
                 props = scrape_page(page, url, debug=debug)
                 for prop in props:
-                    # 面積フィルタ
+                    # 面積フィルタ（Noneの場合はフィルタ通過）
                     if prop["area"] is not None and prop["area"] < MIN_AREA:
                         continue
                     all_properties[prop["id"]] = prop
-                time.sleep(2)  # サーバー負荷軽減
+                if not debug:
+                    time.sleep(2)  # サーバー負荷軽減
             except Exception as e:
                 print(f"  エラー: {url}: {e}")
 
         browser.close()
 
-    print(f"合計 {len(all_properties)} 件取得（面積50㎡以上）")
+    print(f"合計 {len(all_properties)} 件取得（面積50㎡以上フィルタ適用）")
     return all_properties
 
 
