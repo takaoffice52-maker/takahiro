@@ -87,6 +87,30 @@ model MansionSale {
   @@map("mansion_sales")
 }
 
+// 月次レポート購読者
+model ReportSubscriber {
+  id          Int      @id @default(autoincrement())
+  email       String   @unique
+  name        String?
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@map("report_subscribers")
+}
+
+// 月次レポート送信ログ
+model ReportLog {
+  id          Int      @id @default(autoincrement())
+  yearMonth   String   @map("year_month")   // e.g. "2026-03"
+  sentAt      DateTime @default(now()) @map("sent_at")
+  recipients  Int      @default(0)
+  status      String   @default("success")  // "success" | "error"
+  errorMsg    String?  @map("error_msg")
+
+  @@map("report_logs")
+}
+
 model MansionTransaction {
   id                  Int      @id @default(autoincrement())
   mansionId           Int      @map("mansion_id")

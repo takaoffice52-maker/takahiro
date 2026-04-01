@@ -15,6 +15,7 @@ const NAV_ITEMS = [
   { href: "/admin/transactions", label: "成約事例", icon: "📝" },
   { href: "/admin/managements", label: "管理情報", icon: "🔧" },
   { href: "/admin/import", label: "データインポート", icon: "📥" },
+  { href: "/admin/report", label: "レポート配信", icon: "📧" },
 ];
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
